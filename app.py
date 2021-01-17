@@ -1,23 +1,23 @@
 # Python standard libraries
 import json
 import os
-import sqlite3
 
 # Third-party libraries
 from flask import Flask, redirect, request, url_for
 from flask_login import (
     LoginManager,
+    UserMixin,
     current_user,
     login_required,
     login_user,
     logout_user,
+
 )
+from flask_sqlalchemy import SQLAlchemy
 from oauthlib.oauth2 import WebApplicationClient
 import requests
 
-# Internal imports
-from db import init_db_command
-from user import User
+
 
 # Configuration
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", None)
@@ -29,18 +29,22 @@ GOOGLE_DISCOVERY_URL = (
 # Flask app setup
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY") or os.urandom(24)
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///db.sqlite3'
+db = SQLAlchemy(app)
+
+class User(UserMixin, db.Model):
+    id = db.Column(db.String(50), primary_key=True)
+    name = db.Column(db.String(50), nullable=False)
+    email = db.Column(db.String(50), unique=True, nullable=False)
+    profile_pic = db.Column(db.String(50), nullable=False)
+
+
 
 # User session management setup
 # https://flask-login.readthedocs.io/en/latest
 login_manager = LoginManager()
 login_manager.init_app(app)
 
-# Naive database setup
-try:
-    init_db_command()
-except sqlite3.OperationalError:
-    # Assume it's already been created
-    pass
 
 # OAuth 2 client setup
 client = WebApplicationClient(GOOGLE_CLIENT_ID)
@@ -48,7 +52,7 @@ client = WebApplicationClient(GOOGLE_CLIENT_ID)
 # Flask-Login helper to retrieve a user from our db
 @login_manager.user_loader
 def load_user(user_id):
-    return User.get(user_id)
+    return User.query.get(user_id)
 
 
 @app.route("/")
@@ -133,12 +137,13 @@ def callback():
     # Create a user in your db with the information provided
     # by Google
     user = User(
-    id_=unique_id, name=users_name, email=users_email, profile_pic=picture
+    id=unique_id, name=users_name, email=users_email, profile_pic=picture
     )
 
     # Doesn't exist? Add it to the database.
-    if not User.get(unique_id):
-       User.create(unique_id, users_name, users_email, picture)
+    if not User.query.get(unique_id):
+       db.session.add(user)
+       db.session.commit()
 
     # Begin user session by logging the user in
     login_user(user)
@@ -153,4 +158,8 @@ def logout():
     return redirect(url_for("index"))
 
 if __name__ == "__main__":
+    db.create_all()
     app.run(ssl_context="adhoc")
+
+
+
